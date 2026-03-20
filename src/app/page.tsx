@@ -4,6 +4,8 @@ import { useEffect, useState, useCallback, Suspense } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import type { DependencyGraph, DependencyDiff } from '@/engine/types'
 import GraphCanvas from '@/components/GraphCanvas'
+import Sidebar from '@/components/Sidebar'
+import QueryBar from '@/components/QueryBar'
 
 interface ScanState {
   status: 'idle' | 'scanning' | 'done' | 'error'
@@ -14,37 +16,6 @@ interface ScanState {
   fromCache: boolean
 }
 
-
-// Placeholder component for Sidebar
-const SidebarPlaceholder = ({ graph }: { graph: DependencyGraph | null }) => (
-  <div className="w-80 bg-gray-800 border-r border-gray-700 p-4">
-    <h3 className="text-lg font-semibold text-gray-300 mb-4">Analysis</h3>
-    {graph ? (
-      <div className="space-y-4">
-        <div>
-          <h4 className="text-sm font-medium text-gray-400 mb-2">Metadata</h4>
-          <div className="text-xs text-gray-500 space-y-1">
-            <p>Ecosystems: {graph.metadata.ecosystems.join(', ')}</p>
-            <p>Total Packages: {graph.metadata.totalPackages}</p>
-            <p>Max Depth: {graph.metadata.maxDepth}</p>
-            <p>SCC Clusters: {graph.metadata.sccClusters.length}</p>
-          </div>
-        </div>
-        <div>
-          <h4 className="text-sm font-medium text-red-400 mb-2">Issues</h4>
-          <div className="text-xs text-gray-500 space-y-1">
-            <p>Version Conflicts: {graph.metadata.versionConflicts.length}</p>
-            <p>Ghost Dependencies: {graph.metadata.ghostDependencies.length}</p>
-            <p>License Conflicts: {graph.metadata.licenseConflicts.length}</p>
-          </div>
-        </div>
-        <p className="text-xs text-gray-600 mt-4">Detailed sidebar will be implemented here</p>
-      </div>
-    ) : (
-      <p className="text-sm text-gray-500">No graph data available</p>
-    )}
-  </div>
-)
 
 // Filter bar component
 const FilterBar = ({
@@ -87,26 +58,6 @@ const FilterBar = ({
   </div>
 )
 
-// Placeholder component for QueryBar
-const QueryBarPlaceholder = ({ graph }: { graph: DependencyGraph | null }) => (
-  <div className="h-16 bg-gray-800 border-t border-gray-700 p-4">
-    <div className="flex items-center space-x-4">
-      <input
-        type="text"
-        placeholder="Query dependencies (e.g., transitive:react, reverse:lodash)"
-        className="flex-1 bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm text-gray-300 placeholder-gray-500"
-        disabled={!graph}
-      />
-      <button
-        className="px-4 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed"
-        disabled={!graph}
-      >
-        Query
-      </button>
-      <span className="text-xs text-gray-600">Query interface will be implemented here</span>
-    </div>
-  </div>
-)
 
 export default function HomePage() {
   return (
@@ -382,7 +333,6 @@ function HomePageContent() {
               onSearchChange={setSearchTerm}
             />
             <div className="flex-1 flex">
-              <SidebarPlaceholder graph={state.graph} />
               <GraphCanvas
                 graph={state.graph}
                 selectedNodeId={selectedNodeId}
@@ -390,8 +340,19 @@ function HomePageContent() {
                 searchTerm={searchTerm}
                 onNodeSelect={setSelectedNodeId}
               />
+              <Sidebar
+                graph={state.graph}
+                selectedNodeId={selectedNodeId}
+                diff={state.diff}
+                projectDir={projectDir}
+                onNodeSelect={setSelectedNodeId}
+              />
             </div>
-            <QueryBarPlaceholder graph={state.graph} />
+            <QueryBar
+              graph={state.graph}
+              projectDir={projectDir}
+              onNodeSelect={setSelectedNodeId}
+            />
           </div>
         )
 
