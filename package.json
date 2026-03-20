@@ -1,0 +1,44 @@
+{
+  "name": "canopy",
+  "version": "1.0.0",
+  "description": "Polyglot dependency graph analyzer with advanced algorithms",
+  "bin": {
+    "canopy": "./bin/canopy.js"
+  },
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "type-check": "tsc --noEmit",
+    "test": "vitest"
+  },
+  "dependencies": {
+    "next": "^15.1.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "d3": "^7.9.0",
+    "zustand": "^5.0.2",
+    "semver": "^7.6.3",
+    "commander": "^12.1.0",
+    "@iarna/toml": "^2.2.5",
+    "open": "^10.1.0",
+    "chalk": "^5.3.0",
+    "ora": "^8.1.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2",
+    "@types/react": "^19.0.6",
+    "@types/react-dom": "^19.0.2",
+    "@types/d3": "^7.4.3",
+    "@types/semver": "^7.5.8",
+    "@types/node": "^22.10.5",
+    "tailwindcss": "^3.4.17",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.49",
+    "vitest": "^2.1.8"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
