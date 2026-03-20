@@ -1,6 +1,7 @@
 import fs from 'fs'
 import path from 'path'
-import type { LanguageParser, RawDependency, ResolvedDependency } from '../types'
+import type { RawDependency, ResolvedDependency } from '../types'
+import type { LanguageParser } from './base'
 
 export const pipPlugin: LanguageParser = {
   name: 'pip',
@@ -38,7 +39,7 @@ export const pipPlugin: LanguageParser = {
     }
 
     // Fall back to manifest
-    return this.parseManifest(projectDir).map(dep => ({
+    return this.parseManifest(projectDir).map((dep: RawDependency) => ({
       ...dep,
       resolvedVersion: dep.declaredVersion.replace(/[^0-9.]/g, '') || '0.0.0',
       dependencies: [],

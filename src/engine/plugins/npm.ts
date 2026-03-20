@@ -1,6 +1,7 @@
 import fs from 'fs'
 import path from 'path'
-import type { LanguageParser, RawDependency, ResolvedDependency } from '../types'
+import type { RawDependency, ResolvedDependency } from '../types'
+import type { LanguageParser } from './base'
 
 export const npmPlugin: LanguageParser = {
   name: 'npm',
@@ -42,7 +43,7 @@ export const npmPlugin: LanguageParser = {
     if (fs.existsSync(yarnPath)) return parseYarnLock(yarnPath, projectDir)
 
     // No lockfile — fall back to manifest only
-    return this.parseManifest(projectDir).map(dep => ({
+    return this.parseManifest(projectDir).map((dep: RawDependency) => ({
       ...dep,
       resolvedVersion: dep.declaredVersion,
       dependencies: [],
@@ -152,7 +153,7 @@ function parseYarnLock(lockPath: string, projectDir: string): ResolvedDependency
     }
   } catch {
     // Fall back to manifest
-    return npmPlugin.parseManifest(projectDir).map(dep => ({
+    return npmPlugin.parseManifest(projectDir).map((dep: RawDependency) => ({
       ...dep,
       resolvedVersion: dep.declaredVersion,
       dependencies: [],

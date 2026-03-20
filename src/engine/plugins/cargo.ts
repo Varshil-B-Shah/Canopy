@@ -1,6 +1,7 @@
 import fs from 'fs'
 import path from 'path'
-import type { LanguageParser, RawDependency, ResolvedDependency } from '../types'
+import type { RawDependency, ResolvedDependency } from '../types'
+import type { LanguageParser } from './base'
 
 export const cargoPlugin: LanguageParser = {
   name: 'cargo',
@@ -20,7 +21,7 @@ export const cargoPlugin: LanguageParser = {
     if (fs.existsSync(lockPath)) {
       return parseCargoLock(lockPath)
     }
-    return this.parseManifest(projectDir).map(dep => ({
+    return this.parseManifest(projectDir).map((dep: RawDependency) => ({
       ...dep,
       resolvedVersion: dep.declaredVersion.replace(/[^0-9.]/g, '') || '0.0.0',
       dependencies: [],

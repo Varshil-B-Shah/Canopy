@@ -1,6 +1,7 @@
 import fs from 'fs'
 import path from 'path'
-import type { LanguageParser, RawDependency, ResolvedDependency } from '../types'
+import type { RawDependency, ResolvedDependency } from '../types'
+import type { LanguageParser } from './base'
 
 export const goPlugin: LanguageParser = {
   name: 'go-modules',
@@ -21,7 +22,7 @@ export const goPlugin: LanguageParser = {
       return parseGoSum(goSumPath)
     }
     // Fall back to go.mod
-    return this.parseManifest(projectDir).map(dep => ({
+    return this.parseManifest(projectDir).map((dep: RawDependency) => ({
       ...dep,
       resolvedVersion: dep.declaredVersion.replace(/^v/, ''),
       dependencies: [],
