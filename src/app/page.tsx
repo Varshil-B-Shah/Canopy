@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, Suspense } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import type { DependencyGraph, DependencyDiff } from '@/engine/types'
+import GraphCanvas from '@/components/GraphCanvas'
 
 interface ScanState {
   status: 'idle' | 'scanning' | 'done' | 'error'
@@ -13,18 +14,6 @@ interface ScanState {
   fromCache: boolean
 }
 
-// Placeholder component for GraphCanvas
-const GraphCanvasPlaceholder = ({ graph }: { graph: DependencyGraph }) => (
-  <div className="flex-1 bg-gray-900 border border-gray-700 rounded-lg p-8 m-4">
-    <h3 className="text-lg font-semibold text-gray-300 mb-4">Dependency Graph</h3>
-    <div className="text-sm text-gray-400">
-      <p>Nodes: {Object.keys(graph.nodes).length}</p>
-      <p>Edges: {graph.edges.length}</p>
-      <p>Root: {graph.rootId}</p>
-      <p className="mt-4 text-xs">Graph visualization will be implemented here</p>
-    </div>
-  </div>
-)
 
 // Placeholder component for Sidebar
 const SidebarPlaceholder = ({ graph }: { graph: DependencyGraph | null }) => (
@@ -57,18 +46,43 @@ const SidebarPlaceholder = ({ graph }: { graph: DependencyGraph | null }) => (
   </div>
 )
 
-// Placeholder component for FilterBar
-const FilterBarPlaceholder = () => (
-  <div className="h-12 bg-gray-800 border-b border-gray-700 flex items-center px-4">
-    <div className="flex space-x-4 text-sm text-gray-400">
-      <span>Filters:</span>
-      <button className="text-blue-400 hover:text-blue-300">All</button>
-      <button className="text-gray-500 hover:text-gray-400">Direct</button>
-      <button className="text-gray-500 hover:text-gray-400">Dev</button>
-      <button className="text-gray-500 hover:text-gray-400">Conflicts</button>
+// Filter bar component
+const FilterBar = ({
+  filterType,
+  onFilterChange,
+  searchTerm,
+  onSearchChange
+}: {
+  filterType: string
+  onFilterChange: (filter: string) => void
+  searchTerm: string
+  onSearchChange: (term: string) => void
+}) => (
+  <div className="h-12 bg-gray-800 border-b border-gray-700 flex items-center px-4 justify-between">
+    <div className="flex space-x-4 text-sm">
+      <span className="text-gray-400">Filters:</span>
+      {['all', 'direct', 'dev', 'conflicts', 'circular'].map(filter => (
+        <button
+          key={filter}
+          onClick={() => onFilterChange(filter)}
+          className={`capitalize ${
+            filterType === filter
+              ? 'text-blue-400'
+              : 'text-gray-500 hover:text-gray-400'
+          }`}
+        >
+          {filter}
+        </button>
+      ))}
     </div>
-    <div className="ml-auto text-xs text-gray-600">
-      Filter controls will be implemented here
+    <div className="flex items-center space-x-2">
+      <input
+        type="text"
+        placeholder="Search nodes..."
+        value={searchTerm}
+        onChange={(e) => onSearchChange(e.target.value)}
+        className="px-3 py-1 bg-gray-900 border border-gray-600 rounded text-sm text-gray-300 placeholder-gray-500 focus:outline-none focus:border-blue-500"
+      />
     </div>
   </div>
 )
@@ -132,6 +146,11 @@ function HomePageContent() {
 
   const [projectDir, setProjectDir] = useState('')
   const [isScanning, setIsScanning] = useState(false)
+
+  // GraphCanvas state
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
+  const [filterType, setFilterType] = useState('all')
+  const [searchTerm, setSearchTerm] = useState('')
 
   const searchParams = useSearchParams()
   const router = useRouter()
@@ -356,10 +375,21 @@ function HomePageContent() {
 
         return (
           <div className="flex-1 flex flex-col">
-            <FilterBarPlaceholder />
+            <FilterBar
+              filterType={filterType}
+              onFilterChange={setFilterType}
+              searchTerm={searchTerm}
+              onSearchChange={setSearchTerm}
+            />
             <div className="flex-1 flex">
               <SidebarPlaceholder graph={state.graph} />
-              <GraphCanvasPlaceholder graph={state.graph} />
+              <GraphCanvas
+                graph={state.graph}
+                selectedNodeId={selectedNodeId}
+                filterType={filterType}
+                searchTerm={searchTerm}
+                onNodeSelect={setSelectedNodeId}
+              />
             </div>
             <QueryBarPlaceholder graph={state.graph} />
           </div>
