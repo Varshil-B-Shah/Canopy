@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Polyglot dependency graph analyzer with advanced algorithms",
   "bin": {
-    "canopy": "./bin/canopy.js"
+    "canopy": "./bin/canopy-wrapper.js"
   },
   "type": "module",
   "scripts": {
