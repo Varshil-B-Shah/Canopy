@@ -1,87 +1,319 @@
 #!/usr/bin/env node
 
+// bin/canopy.js - Complete rewrite as HTTP client
 import { program } from 'commander'
 import path from 'path'
 import fs from 'fs'
-import { spawn, execSync } from 'child_process'
+import os from 'os'
+import net from 'net'
+import { spawn } from 'child_process'
 import { fileURLToPath } from 'url'
 import { dirname } from 'path'
 import open from 'open'
 import chalk from 'chalk'
 import ora from 'ora'
 
+// ✅ NO TypeScript engine imports - HTTP client only
+
 // ES module compatibility
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
+
+// Server management state
+let tempServerProcess = null
+let tempServerPort = null
+
+// ────────────────────────────────────────────────────────────────────────────────
+// Server Management Functions
+// ────────────────────────────────────────────────────────────────────────────────
+
+async function checkServerRunning(port = 3000) {
+  try {
+    const response = await fetch(`http://localhost:${port}/api/health`, {
+      method: 'GET',
+      signal: AbortSignal.timeout(2000)
+    })
+    return response.ok
+  } catch (error) {
+    return false
+  }
+}
+
+async function findAvailablePort(startPort = 3000) {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer()
+
+    server.listen(startPort, () => {
+      const port = server.address().port
+      server.close(() => resolve(port))
+    })
+
+    server.on('error', (err) => {
+      if (err.code === 'EADDRINUSE') {
+        // Try next port
+        resolve(findAvailablePort(startPort + 1))
+      } else {
+        reject(err)
+      }
+    })
+  })
+}
+
+async function ensureProductionBuild() {
+  const projectRoot = path.resolve(__dirname, '..')
+  const nextDir = path.join(projectRoot, '.next')
+
+  if (!fs.existsSync(nextDir)) {
+    console.log(chalk.blue('🔨 Building production server...'))
+
+    const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm'
+
+    try {
+      const buildProcess = spawn(npmCmd, ['run', 'build'], {
+        cwd: projectRoot,
+        stdio: 'inherit',
+        shell: true
+      })
+
+      await new Promise((resolve, reject) => {
+        buildProcess.on('exit', (code) => {
+          if (code === 0) resolve()
+          else reject(new Error(`Build failed with code ${code}`))
+        })
+      })
+    } catch (error) {
+      throw new Error(`Production build failed: ${error.message}`)
+    }
+  }
+}
+
+async function startTempServer(port) {
+  await ensureProductionBuild()
+
+  const projectRoot = path.resolve(__dirname, '..')
+  const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm'
+
+  const serverProcess = spawn(npmCmd, ['start'], {
+    cwd: projectRoot,
+    stdio: 'pipe',
+    shell: true,
+    env: { ...process.env, PORT: port.toString() }
+  })
+
+  // Create PID file for cleanup
+  const pidFile = path.join(os.tmpdir(), `canopy-server-${port}.pid`)
+  fs.writeFileSync(pidFile, serverProcess.pid.toString())
+
+  // Wait for server to be ready
+  const startTime = Date.now()
+  while (Date.now() - startTime < 30000) {
+    await new Promise(resolve => setTimeout(resolve, 1000))
+    if (await checkServerRunning(port)) {
+      tempServerProcess = serverProcess
+      tempServerPort = port
+      return { pid: serverProcess.pid, port }
+    }
+  }
+
+  throw new Error('Server failed to start within 30 seconds')
+}
+
+async function cleanupTempServer() {
+  if (tempServerProcess) {
+    tempServerProcess.kill('SIGTERM')
+
+    // Clean up PID file
+    const pidFile = path.join(os.tmpdir(), `canopy-server-${tempServerPort}.pid`)
+    try {
+      fs.unlinkSync(pidFile)
+    } catch (error) {
+      // PID file may not exist, ignore
+    }
+
+    tempServerProcess = null
+    tempServerPort = null
+  }
+}
+
+// Cleanup on process exit
+process.on('SIGINT', cleanupTempServer)
+process.on('SIGTERM', cleanupTempServer)
+process.on('exit', cleanupTempServer)
+
+// ────────────────────────────────────────────────────────────────────────────────
+// HTTP Client Functions
+// ────────────────────────────────────────────────────────────────────────────────
+
+async function ensureServer(requestedPort = 3000) {
+  // Check if server already running on requested port
+  if (await checkServerRunning(requestedPort)) {
+    return requestedPort
+  }
+
+  // Find available port and start server
+  const availablePort = await findAvailablePort(requestedPort)
+  const spinner = ora('Starting server...').start()
+
+  try {
+    await startTempServer(availablePort)
+    spinner.succeed(`Server started on port ${availablePort}`)
+    return availablePort
+  } catch (error) {
+    spinner.fail(`Failed to start server: ${error.message}`)
+    throw error
+  }
+}
+
+async function makeApiRequest(endpoint, data, port) {
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), 300000) // 5 min timeout
+
+  try {
+    const response = await fetch(`http://localhost:${port}/api/${endpoint}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+      signal: controller.signal
+    })
+
+    clearTimeout(timeoutId)
+
+    if (!response.ok) {
+      const error = await response.json()
+      console.error(chalk.red(`✗ ${error.message || 'Request failed'}`))
+      process.exit(error.code === 'SCAN_FAILED' ? 1 : 2)
+    }
+
+    return await response.json()
+
+  } catch (error) {
+    clearTimeout(timeoutId)
+
+    if (error.name === 'AbortError') {
+      console.error(chalk.red('✗ Request timeout - analysis taking too long'))
+      process.exit(124)
+    }
+
+    throw error
+  }
+}
 
 program
   .name('canopy')
   .description('Polyglot dependency graph analyzer')
   .version('1.0.0')
 
-// ─── SCAN COMMAND ─────────────────────────────────────────────────────────────
+// ────────────────────────────────────────────────────────────────────────────────
+// SCAN COMMAND
+// ────────────────────────────────────────────────────────────────────────────────
 
 program
   .command('scan')
   .description('Scan project and open web interface')
   .argument('[dir]', 'Project directory to scan', process.cwd())
   .option('--no-ui', 'Skip browser, print summary only')
-  .option('--port <port>', 'Custom port for web server', '3847')
+  .option('--json', 'Output JSON format')
+  .option('--port <port>', 'Custom port for web server', '3000')
   .option('--force', 'Ignore cache and force full analysis')
-  .option('--json', 'Output results in JSON format')
   .action(async (dir, options) => {
     try {
       const projectDir = path.resolve(dir)
+      const port = await ensureServer(parseInt(options.port))
 
-      // Validate project directory exists
-      if (!fs.existsSync(projectDir)) {
-        console.error(chalk.red(`✗ Directory not found: ${projectDir}`))
-        process.exit(1)
-      }
+      const spinner = ora('Analyzing dependencies...').start()
 
-      if (options.json) {
-        // JSON output mode - run analysis directly without server
-        await runJsonAnalysis(projectDir, options.force)
-      } else if (options.ui === false) {
-        // No UI mode - run analysis and print summary
-        await runHeadlessAnalysis(projectDir, options.force)
+      const result = await makeApiRequest('scan', {
+        projectDir,
+        force: options.force || false
+      }, port)
+
+      spinner.succeed('Analysis complete')
+
+      if (options.ui === false) {
+        // Print summary for --no-ui mode
+        const { graph } = result
+        const { metadata } = graph || {}
+
+        console.log(chalk.cyan('\n📊 Dependency Analysis Results'))
+        console.log(chalk.gray('─'.repeat(50)))
+        console.log(`${chalk.green('✓')} Total packages: ${chalk.bold(metadata?.totalPackages || 0)}`)
+        console.log(`${chalk.green('✓')} Total edges: ${chalk.bold(metadata?.totalEdges || 0)}`)
+
+        if (options.json) {
+          console.log('\n' + JSON.stringify(result, null, 2))
+        }
       } else {
-        // Full UI mode - start server and open browser
-        await runWithWebInterface(projectDir, options.port, options.force)
+        const url = `http://localhost:${port}?dir=${encodeURIComponent(projectDir)}&autoScan=true`
+        await open(url)
+        console.log(chalk.green(`✓ Analysis complete. Opening ${url}`))
       }
+
     } catch (error) {
       console.error(chalk.red(`✗ Scan failed: ${error.message}`))
       process.exit(1)
+    } finally {
+      await cleanupTempServer()
     }
   })
 
-// ─── CHECK COMMAND ────────────────────────────────────────────────────────────
+// ────────────────────────────────────────────────────────────────────────────────
+// CHECK COMMAND
+// ────────────────────────────────────────────────────────────────────────────────
 
 program
   .command('check')
-  .description('Check for issues and exit with error code')
-  .argument('[dir]', 'Project directory to check', process.cwd())
+  .description('Analyze dependencies and exit with code 1 if issues found')
+  .argument('[dir]', 'Project directory to analyze', process.cwd())
   .option('--conflicts-only', 'Only fail on version conflicts')
   .option('--no-ghosts', 'Ignore ghost dependencies')
-  .option('--no-license', 'Ignore license conflicts')
   .action(async (dir, options) => {
     try {
       const projectDir = path.resolve(dir)
+      const port = await ensureServer(3000)
 
-      if (!fs.existsSync(projectDir)) {
-        console.error(chalk.red(`✗ Directory not found: ${projectDir}`))
+      const spinner = ora('Checking for issues...').start()
+
+      const result = await makeApiRequest('check', {
+        projectDir,
+        conflictsOnly: options.conflictsOnly || false,
+        noGhosts: options.noGhosts || false
+      }, port)
+
+      spinner.stop()
+
+      // Display results
+      if (result.hasIssues) {
+        console.log(chalk.red('✗ Issues found:'))
+
+        if (result.versionConflicts.length > 0) {
+          console.log(chalk.yellow(`  ${result.versionConflicts.length} version conflicts`))
+        }
+
+        if (result.ghostDependencies.length > 0) {
+          console.log(chalk.yellow(`  ${result.ghostDependencies.length} ghost dependencies`))
+        }
+
+        if (result.licenseConflicts.length > 0) {
+          console.log(chalk.yellow(`  ${result.licenseConflicts.length} license issues`))
+        }
+
         process.exit(1)
+      } else {
+        console.log(chalk.green('✓ No issues found'))
+        process.exit(0)
       }
 
-      const hasIssues = await runCheck(projectDir, options)
-      process.exit(hasIssues ? 1 : 0)
     } catch (error) {
       console.error(chalk.red(`✗ Check failed: ${error.message}`))
       process.exit(1)
+    } finally {
+      await cleanupTempServer()
     }
   })
 
-// ─── DIFF COMMAND ─────────────────────────────────────────────────────────────
+// ────────────────────────────────────────────────────────────────────────────────
+// DIFF COMMAND
+// ────────────────────────────────────────────────────────────────────────────────
 
 program
   .command('diff')
@@ -90,398 +322,137 @@ program
   .action(async (dir) => {
     try {
       const projectDir = path.resolve(dir)
+      const port = await ensureServer(3000)
 
-      if (!fs.existsSync(projectDir)) {
-        console.error(chalk.red(`✗ Directory not found: ${projectDir}`))
-        process.exit(1)
+      const spinner = ora('Computing differences...').start()
+
+      const result = await makeApiRequest('diff', {
+        projectDir
+      }, port)
+
+      spinner.stop()
+
+      if (!result.changes) {
+        console.log(chalk.blue(result.message || 'No changes detected'))
+        return
       }
 
-      await runDiff(projectDir)
+      // Display diff summary
+      const { summary } = result
+      console.log(chalk.green(`Changes since last analysis:`))
+      console.log(`  Added: ${chalk.green(summary.added)}`)
+      console.log(`  Removed: ${chalk.red(summary.removed)}`)
+      console.log(`  Updated: ${chalk.yellow(summary.updated)}`)
+
+      // Show detailed changes
+      console.log(JSON.stringify(result.changes, null, 2))
+
     } catch (error) {
       console.error(chalk.red(`✗ Diff failed: ${error.message}`))
       process.exit(1)
+    } finally {
+      await cleanupTempServer()
     }
   })
 
-// ─── QUERY COMMAND ────────────────────────────────────────────────────────────
+// ────────────────────────────────────────────────────────────────────────────────
+// QUERY COMMAND
+// ────────────────────────────────────────────────────────────────────────────────
 
 program
-  .command('query')
-  .description('Run single dependency query')
-  .argument('<question>', 'Query to run (e.g., "does express depend on lodash?")')
-  .argument('[dir]', 'Project directory to query', process.cwd())
-  .action(async (question, dir) => {
+  .command('query <fromId> <toId>')
+  .description('Query transitive dependencies between packages')
+  .argument('[dir]', 'Project directory to analyze', process.cwd())
+  .action(async (fromId, toId, dir) => {
     try {
       const projectDir = path.resolve(dir)
+      const port = await ensureServer(3000)
 
-      if (!fs.existsSync(projectDir)) {
-        console.error(chalk.red(`✗ Directory not found: ${projectDir}`))
-        process.exit(1)
+      const spinner = ora(`Querying path from ${fromId} to ${toId}...`).start()
+
+      const result = await makeApiRequest('query', {
+        type: 'transitive',
+        fromId,
+        toId,
+        projectDir
+      }, port)
+
+      spinner.stop()
+
+      if (result.found) {
+        console.log(chalk.green(`✓ Path found (${result.distance} steps):`))
+        console.log(result.path.join(' → '))
+      } else {
+        console.log(chalk.red(`✗ No path found from ${fromId} to ${toId}`))
       }
 
-      await runQuery(question, projectDir)
     } catch (error) {
       console.error(chalk.red(`✗ Query failed: ${error.message}`))
+      process.exit(1)
+    } finally {
+      await cleanupTempServer()
+    }
+  })
+
+// ────────────────────────────────────────────────────────────────────────────────
+// SERVER COMMAND
+// ────────────────────────────────────────────────────────────────────────────────
+
+program
+  .command('server')
+  .description('Start persistent server for development')
+  .option('--port <port>', 'Port for web server', '3000')
+  .option('--stop', 'Stop running server')
+  .action(async (options) => {
+    const port = parseInt(options.port)
+
+    if (options.stop) {
+      // Stop persistent server
+      const pidFile = path.join(os.tmpdir(), `canopy-server-${port}.pid`)
+
+      if (fs.existsSync(pidFile)) {
+        const pid = fs.readFileSync(pidFile, 'utf8')
+        try {
+          process.kill(pid, 'SIGTERM')
+          fs.unlinkSync(pidFile)
+          console.log(chalk.green(`✓ Server stopped (PID: ${pid})`))
+        } catch (error) {
+          console.log(chalk.yellow(`Server process ${pid} not found (may have already stopped)`))
+          fs.unlinkSync(pidFile)
+        }
+      } else {
+        console.log(chalk.yellow('No running server found'))
+      }
+      return
+    }
+
+    // Start persistent server
+    if (await checkServerRunning(port)) {
+      console.log(chalk.blue(`Server already running on port ${port}`))
+      console.log(chalk.green(`Open http://localhost:${port}`))
+      return
+    }
+
+    try {
+      await startTempServer(port)
+      console.log(chalk.green(`✓ Server started on port ${port}`))
+      console.log(chalk.blue(`Open http://localhost:${port}`))
+      console.log(chalk.gray('Press Ctrl+C to stop'))
+
+      // Keep process alive
+      process.on('SIGINT', () => {
+        console.log(chalk.yellow('\nShutting down server...'))
+        cleanupTempServer()
+        process.exit(0)
+      })
+
+      // Keep alive
+      await new Promise(() => {})
+
+    } catch (error) {
+      console.error(chalk.red(`✗ Failed to start server: ${error.message}`))
       process.exit(1)
     }
   })
 
-// ─── HELPER FUNCTIONS ─────────────────────────────────────────────────────────
-
-async function runJsonAnalysis(projectDir, force = false) {
-  const { runAnalysis } = await import('../src/engine/index.ts')
-
-  const spinner = ora('Analyzing dependencies...').start()
-
-  try {
-    const result = await runAnalysis({ projectDir, force })
-    spinner.succeed('Analysis complete')
-
-    console.log(JSON.stringify({
-      graph: result.graph,
-      diff: result.diff,
-      fromCache: result.fromCache,
-      scanTimeMs: result.scanTimeMs,
-    }, null, 2))
-  } catch (error) {
-    spinner.fail('Analysis failed')
-    throw error
-  }
-}
-
-async function runHeadlessAnalysis(projectDir, force = false) {
-  const { runAnalysis } = await import('../src/engine/index.ts')
-
-  const spinner = ora('Analyzing dependencies...').start()
-
-  try {
-    const result = await runAnalysis({ projectDir, force })
-    spinner.succeed('Analysis complete')
-
-    console.log(chalk.cyan('\n📊 Dependency Analysis Results'))
-    console.log(chalk.gray('─'.repeat(50)))
-
-    const { graph } = result
-    const { metadata } = graph
-
-    console.log(`${chalk.green('✓')} Total packages: ${chalk.bold(metadata.totalPackages)}`)
-    console.log(`${chalk.green('✓')} Total edges: ${chalk.bold(metadata.totalEdges)}`)
-    console.log(`${chalk.green('✓')} Ecosystems: ${chalk.bold(metadata.ecosystems.join(', '))}`)
-    console.log(`${chalk.blue('ℹ')} Scan time: ${chalk.bold(result.scanTimeMs)}ms`)
-    console.log(`${chalk.blue('ℹ')} From cache: ${result.fromCache ? chalk.green('yes') : chalk.yellow('no')}`)
-
-    // Show issues summary
-    const versionConflicts = metadata.versionConflicts?.length || 0
-    const ghostDeps = metadata.ghostDependencies?.length || 0
-    const licenseConflicts = metadata.licenseConflicts?.length || 0
-    const sccClusters = metadata.sccClusters?.filter(c => c.length > 1).length || 0
-
-    if (versionConflicts > 0) {
-      console.log(`${chalk.red('⚠')} Version conflicts: ${chalk.bold(versionConflicts)}`)
-    }
-
-    if (ghostDeps > 0) {
-      console.log(`${chalk.yellow('⚠')} Ghost dependencies: ${chalk.bold(ghostDeps)}`)
-    }
-
-    if (licenseConflicts > 0) {
-      console.log(`${chalk.red('⚠')} License conflicts: ${chalk.bold(licenseConflicts)}`)
-    }
-
-    if (sccClusters > 0) {
-      console.log(`${chalk.yellow('⚠')} Circular dependency clusters: ${chalk.bold(sccClusters)}`)
-    }
-
-    if (versionConflicts + ghostDeps + licenseConflicts + sccClusters === 0) {
-      console.log(`${chalk.green('✓')} No issues found`)
-    }
-
-    // Show diff if available
-    if (result.diff && result.diff.hasChanges) {
-      console.log(chalk.cyan('\n📈 Changes Since Last Scan'))
-      console.log(chalk.gray('─'.repeat(50)))
-
-      if (result.diff.added.length > 0) {
-        console.log(`${chalk.green('+')} Added: ${result.diff.added.length} packages`)
-      }
-
-      if (result.diff.removed.length > 0) {
-        console.log(`${chalk.red('-')} Removed: ${result.diff.removed.length} packages`)
-      }
-
-      if (result.diff.updated.length > 0) {
-        console.log(`${chalk.blue('~')} Updated: ${result.diff.updated.length} packages`)
-      }
-    }
-
-  } catch (error) {
-    spinner.fail('Analysis failed')
-    throw error
-  }
-}
-
-async function runWithWebInterface(projectDir, port, force = false) {
-  const spinner = ora('Starting Canopy server...').start()
-
-  try {
-    // Get the project root directory (where package.json is)
-    const projectRoot = path.resolve(__dirname, '..')
-
-    // Ensure production build exists
-    try {
-      if (!fs.existsSync(path.join(projectRoot, '.next'))) {
-        spinner.text = 'Building application for first time...'
-        execSync('npm run build', { cwd: projectRoot, stdio: 'inherit' })
-      }
-    } catch (buildError) {
-      spinner.fail('Build failed')
-      throw new Error('Failed to build Next.js app. Run "npm run build" manually.')
-    }
-
-    // Start Next.js production server
-    const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm'
-    const serverProcess = spawn(npmCmd, ['run', 'start'], {
-      cwd: projectRoot,
-      env: {
-        ...process.env,
-        PORT: port,
-        PROJECT_DIR: projectDir,
-        FORCE_SCAN: force ? 'true' : 'false'
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-      shell: true // Handle cross-platform execution
-    })
-
-    let serverReady = false
-
-    // Wait for server to be ready
-    serverProcess.stdout.on('data', (data) => {
-      const output = data.toString()
-      if (output.includes('Ready') || output.includes(`localhost:${port}`)) {
-        serverReady = true
-      }
-    })
-
-    // Wait for server startup
-    await waitForServer(`http://localhost:${port}`, 30000)
-    spinner.succeed(`Server started on http://localhost:${port}`)
-
-    // Open browser
-    const url = `http://localhost:${port}?dir=${encodeURIComponent(projectDir)}&force=${force}`
-    console.log(chalk.cyan(`🌐 Opening ${url}`))
-
-    try {
-      await open(url)
-    } catch (openError) {
-      console.log(chalk.yellow(`Could not open browser automatically. Please visit: ${url}`))
-    }
-
-    // Keep process alive and handle cleanup
-    process.on('SIGINT', () => {
-      console.log(chalk.yellow('\n🛑 Shutting down server...'))
-      serverProcess.kill()
-      process.exit(0)
-    })
-
-    process.on('SIGTERM', () => {
-      serverProcess.kill()
-      process.exit(0)
-    })
-
-    // Wait for server process to exit
-    serverProcess.on('exit', (code) => {
-      if (code !== 0) {
-        console.error(chalk.red(`Server exited with code ${code}`))
-      }
-      process.exit(code || 0)
-    })
-
-  } catch (error) {
-    spinner.fail('Failed to start server')
-    throw error
-  }
-}
-
-async function runCheck(projectDir, options) {
-  const { runAnalysis } = await import('../src/engine/index.ts')
-
-  const spinner = ora('Checking for issues...').start()
-
-  try {
-    const result = await runAnalysis({ projectDir })
-    spinner.succeed('Check complete')
-
-    const { metadata } = result.graph
-    let hasIssues = false
-
-    // Check version conflicts
-    const versionConflicts = metadata.versionConflicts?.length || 0
-    if (versionConflicts > 0) {
-      console.log(chalk.red(`✗ Version conflicts found: ${versionConflicts}`))
-      hasIssues = true
-    }
-
-    // Check ghost dependencies (unless disabled)
-    if (!options.noGhosts) {
-      const ghostDeps = metadata.ghostDependencies?.length || 0
-      if (ghostDeps > 0) {
-        console.log(chalk.red(`✗ Ghost dependencies found: ${ghostDeps}`))
-        if (!options.conflictsOnly) hasIssues = true
-      }
-    }
-
-    // Check license conflicts (unless disabled)
-    if (!options.noLicense) {
-      const licenseConflicts = metadata.licenseConflicts?.length || 0
-      if (licenseConflicts > 0) {
-        console.log(chalk.red(`✗ License conflicts found: ${licenseConflicts}`))
-        if (!options.conflictsOnly) hasIssues = true
-      }
-    }
-
-    // Check circular dependencies
-    const sccClusters = metadata.sccClusters?.filter(c => c.length > 1).length || 0
-    if (sccClusters > 0) {
-      console.log(chalk.yellow(`⚠ Circular dependency clusters: ${sccClusters}`))
-      if (!options.conflictsOnly) hasIssues = true
-    }
-
-    if (!hasIssues) {
-      console.log(chalk.green('✓ No issues found'))
-    }
-
-    return hasIssues
-
-  } catch (error) {
-    spinner.fail('Check failed')
-    throw error
-  }
-}
-
-async function runDiff(projectDir) {
-  const { runAnalysis } = await import('../src/engine/index.ts')
-
-  const spinner = ora('Computing dependency diff...').start()
-
-  try {
-    const result = await runAnalysis({ projectDir, force: true })
-    spinner.succeed('Diff computed')
-
-    if (!result.diff || !result.diff.hasChanges) {
-      console.log(chalk.yellow('No changes detected since last scan'))
-      return
-    }
-
-    const { diff } = result
-
-    console.log(chalk.cyan('\n📈 Dependency Changes'))
-    console.log(chalk.gray('─'.repeat(50)))
-
-    // Show added packages
-    if (diff.added.length > 0) {
-      console.log(chalk.green(`\n+ Added (${diff.added.length}):`))
-      diff.added.forEach(node => {
-        console.log(`  ${chalk.green('+')} ${node.name}@${node.resolvedVersion}`)
-      })
-    }
-
-    // Show removed packages
-    if (diff.removed.length > 0) {
-      console.log(chalk.red(`\n- Removed (${diff.removed.length}):`))
-      diff.removed.forEach(node => {
-        console.log(`  ${chalk.red('-')} ${node.name}@${node.resolvedVersion}`)
-      })
-    }
-
-    // Show updated packages
-    if (diff.updated.length > 0) {
-      console.log(chalk.blue(`\n~ Updated (${diff.updated.length}):`))
-      diff.updated.forEach(update => {
-        const color = update.changeType === 'major' ? chalk.red :
-                     update.changeType === 'minor' ? chalk.yellow : chalk.green
-        console.log(`  ${chalk.blue('~')} ${update.node.name}: ${update.previousVersion} → ${color(update.currentVersion)} (${update.changeType})`)
-      })
-    }
-
-    // Show new conflicts
-    if (diff.newConflicts?.length > 0) {
-      console.log(chalk.red(`\n⚠ New Conflicts (${diff.newConflicts.length}):`))
-      diff.newConflicts.forEach(conflict => {
-        console.log(`  ${chalk.red('⚠')} ${conflict.packageName}: ${conflict.conflictingVersions.join(' vs ')}`)
-      })
-    }
-
-    // Show resolved conflicts
-    if (diff.resolvedConflicts?.length > 0) {
-      console.log(chalk.green(`\n✓ Resolved Conflicts (${diff.resolvedConflicts.length}):`))
-      diff.resolvedConflicts.forEach(conflict => {
-        console.log(`  ${chalk.green('✓')} ${conflict.packageName}`)
-      })
-    }
-
-  } catch (error) {
-    spinner.fail('Diff failed')
-    throw error
-  }
-}
-
-async function runQuery(question, projectDir) {
-  const { runAnalysis, queryTransitive } = await import('../src/engine/index.ts')
-
-  const spinner = ora('Running query...').start()
-
-  try {
-    const result = await runAnalysis({ projectDir })
-    spinner.succeed('Query complete')
-
-    console.log(chalk.cyan(`\n🔍 Query: ${question}`))
-    console.log(chalk.gray('─'.repeat(50)))
-
-    // Simple query parsing - look for "does X depend on Y" pattern
-    const dependsPattern = /does\s+(.+?)\s+(?:depend\s+on|use)\s+(.+?)(?:\?|$)/i
-    const match = question.match(dependsPattern)
-
-    if (match) {
-      const [, fromPackage, toPackage] = match
-      const fromId = `npm:${fromPackage.trim()}`
-      const toId = `npm:${toPackage.trim()}`
-
-      const queryResult = queryTransitive(result.graph, fromId, toId)
-
-      if (queryResult.result) {
-        console.log(chalk.green(`✓ Yes, ${fromPackage} depends on ${toPackage}`))
-        console.log(chalk.gray(`  Method: ${queryResult.method}, Confirmed: ${queryResult.confirmed}`))
-      } else {
-        console.log(chalk.red(`✗ No, ${fromPackage} does not depend on ${toPackage}`))
-      }
-    } else {
-      console.log(chalk.yellow('Query format not recognized. Try: "does package-a depend on package-b?"'))
-    }
-
-  } catch (error) {
-    spinner.fail('Query failed')
-    throw error
-  }
-}
-
-async function waitForServer(url, timeout = 30000) {
-  const start = Date.now()
-
-  while (Date.now() - start < timeout) {
-    try {
-      const response = await fetch(`${url}/api/health`)
-      if (response.ok) {
-        return true
-      }
-    } catch (error) {
-      // Server not ready yet
-    }
-
-    await new Promise(resolve => setTimeout(resolve, 1000))
-  }
-
-  throw new Error('Server failed to start within timeout')
-}
-
-// Parse command line arguments
-program.parse(process.argv)
+program.parse()

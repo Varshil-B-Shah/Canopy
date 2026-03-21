@@ -180,7 +180,7 @@ function HomePageContent() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ projectDir: directory, force }),
+        body: JSON.stringify({ projectDir: directory.replace(/\\/g, '/'), force }),
       })
 
       const endTime = Date.now()

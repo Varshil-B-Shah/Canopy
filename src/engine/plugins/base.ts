@@ -15,4 +15,7 @@ export interface LanguageParser {
 
   // Reads source files → list of imported package names (for ghost detection)
   parseImports(projectDir: string): string[]
+
+  // Extracts license information from lockfile (optional - returns empty map if not implemented)
+  parseLicenses?(projectDir: string): Record<string, string>
 }

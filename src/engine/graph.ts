@@ -13,6 +13,7 @@ export function createNode(
   declaredVersion: string,
   resolvedVersion: string,
   isRoot = false,
+  license = 'UNKNOWN',
 ): PackageNode {
   return {
     id,
@@ -20,7 +21,7 @@ export function createNode(
     ecosystem,
     declaredVersion,
     resolvedVersion,
-    license: 'UNKNOWN',
+    license,
     isRoot,
     merkleHash: '',
     sccId: -1,

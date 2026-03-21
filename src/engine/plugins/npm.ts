@@ -54,6 +54,17 @@ export const npmPlugin: LanguageParser = {
     // Ghost detection handled in ghost.ts using regex scan
     return []
   },
+
+  // New method to extract licenses from lockfile
+  parseLicenses(projectDir: string): Record<string, string> {
+    const lockPath = path.join(projectDir, 'package-lock.json')
+    if (fs.existsSync(lockPath)) return extractLicensesFromPackageLock(lockPath)
+
+    const yarnPath = path.join(projectDir, 'yarn.lock')
+    if (fs.existsSync(yarnPath)) return extractLicensesFromYarnLock(yarnPath)
+
+    return {}
+  },
 }
 
 function parsePackageLock(lockPath: string): ResolvedDependency[] {
@@ -71,7 +82,21 @@ function parsePackageLock(lockPath: string): ResolvedDependency[] {
         // Extract name from path like "node_modules/express" or "node_modules/@org/pkg"
         const name = pkgPath.replace(/^.*node_modules\//, '')
         const version = info.version ?? '0.0.0'
-        const license = info.license ?? 'UNKNOWN'
+
+        // Parse transitive dependencies
+        const dependencies = []
+        if (info.dependencies) {
+          for (const [depName, depConstraint] of Object.entries(info.dependencies as Record<string, string>)) {
+            dependencies.push({
+              name: depName,
+              ecosystem: 'npm' as const,
+              declaredVersion: depConstraint,
+              resolvedVersion: depConstraint,
+              type: 'transitive' as const,
+              dependencies: [], // For now, don't parse nested dependencies
+            })
+          }
+        }
 
         resolved.push({
           name,
@@ -79,20 +104,35 @@ function parsePackageLock(lockPath: string): ResolvedDependency[] {
           declaredVersion: version,
           resolvedVersion: version,
           type: info.dev ? 'dev' : info.peer ? 'peer' : 'direct',
-          dependencies: [],
+          dependencies,
         })
       }
     } else if (lock.dependencies) {
       // v1 format
       function flattenDeps(deps: Record<string, any>): void {
         for (const [name, info] of Object.entries(deps)) {
+          // Parse transitive dependencies for v1 format
+          const dependencies = []
+          if (info.dependencies) {
+            for (const [depName, depInfo] of Object.entries(info.dependencies as Record<string, any>)) {
+              dependencies.push({
+                name: depName,
+                ecosystem: 'npm' as const,
+                declaredVersion: depInfo.version ?? '0.0.0',
+                resolvedVersion: depInfo.version ?? '0.0.0',
+                type: 'transitive' as const,
+                dependencies: [], // For now, don't parse nested dependencies
+              })
+            }
+          }
+
           resolved.push({
             name,
             ecosystem: 'npm',
             declaredVersion: info.version ?? '0.0.0',
             resolvedVersion: info.version ?? '0.0.0',
             type: info.dev ? 'dev' : 'direct',
-            dependencies: [],
+            dependencies,
           })
           if (info.dependencies) flattenDeps(info.dependencies)
         }
@@ -161,4 +201,45 @@ function parseYarnLock(lockPath: string, projectDir: string): ResolvedDependency
   }
 
   return resolved
+}
+
+function extractLicensesFromPackageLock(lockPath: string): Record<string, string> {
+  const licenses: Record<string, string> = {}
+
+  try {
+    const lock = JSON.parse(fs.readFileSync(lockPath, 'utf-8'))
+
+    // package-lock.json v2/v3 format uses "packages" key
+    if (lock.packages) {
+      for (const [pkgPath, info] of Object.entries(lock.packages as Record<string, any>)) {
+        if (pkgPath === '') continue  // Root package
+        if (pkgPath.includes('node_modules/node_modules/')) continue  // Skip hoisted dupes
+
+        // Extract name from path like "node_modules/express" or "node_modules/@org/pkg"
+        const name = pkgPath.replace(/^.*node_modules\//, '')
+        const license = info.license ?? 'UNKNOWN'
+        licenses[name] = license
+      }
+    } else if (lock.dependencies) {
+      // v1 format
+      function extractLicensesRecursive(deps: Record<string, any>): void {
+        for (const [name, info] of Object.entries(deps)) {
+          licenses[name] = info.license ?? 'UNKNOWN'
+          if (info.dependencies) extractLicensesRecursive(info.dependencies)
+        }
+      }
+      extractLicensesRecursive(lock.dependencies)
+    }
+  } catch {
+    // Corrupt lockfile - return empty licenses
+  }
+
+  return licenses
+}
+
+function extractLicensesFromYarnLock(lockPath: string): Record<string, string> {
+  // For yarn.lock, licenses are not easily extractable from the lockfile format
+  // This would require parsing the actual node_modules or using yarn info commands
+  // For now, return empty map - could be enhanced later
+  return {}
 }

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { readCache, deserializeGraph } from '@/engine/cache'
 import { queryTransitive, queryReverseDependencies } from '@/engine'
+import type { DependencyGraph } from '@/engine/types'
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)
@@ -46,6 +47,59 @@ export async function GET(request: NextRequest) {
   return NextResponse.json({ error: 'Unknown query type' }, { status: 400 })
 }
 
+// ─── Path Finding Helper ─────────────────────────────────────────────────────
+
+/**
+ * Finds the dependency path from one package to another using BFS
+ * Returns the actual path array or null if no path exists
+ */
+function findDependencyPath(
+  graph: DependencyGraph,
+  fromId: string,
+  toId: string
+): string[] | null {
+  if (fromId === toId) {
+    return [fromId]
+  }
+
+  if (!graph.nodes[fromId] || !graph.nodes[toId]) {
+    return null
+  }
+
+  // BFS with path tracking
+  const visited = new Set<string>()
+  const queue: Array<{ nodeId: string; path: string[] }> = [
+    { nodeId: fromId, path: [fromId] }
+  ]
+
+  while (queue.length > 0) {
+    const { nodeId, path } = queue.shift()!
+
+    if (visited.has(nodeId)) {
+      continue
+    }
+    visited.add(nodeId)
+
+    // Check if we've reached the target
+    if (nodeId === toId) {
+      return path
+    }
+
+    // Add neighbors to queue with extended path
+    const neighbors = graph.adjacencyList[nodeId] || []
+    for (const neighbor of neighbors) {
+      if (!visited.has(neighbor)) {
+        queue.push({
+          nodeId: neighbor,
+          path: [...path, neighbor]
+        })
+      }
+    }
+  }
+
+  return null // No path found
+}
+
 // ADD new POST method for CLI compatibility
 export async function POST(request: NextRequest) {
   try {
@@ -86,10 +140,22 @@ export async function POST(request: NextRequest) {
     // Use existing query engine with proper parameters
     const result = queryTransitive(graph, fromId, toId)
 
+    // If no path exists, return early
+    if (!result.result) {
+      return Response.json({
+        found: false,
+        path: [],
+        distance: -1
+      })
+    }
+
+    // Find the actual dependency path using BFS
+    const path = findDependencyPath(graph, fromId, toId)
+
     return Response.json({
-      found: result.found,
-      path: result.path || [],
-      distance: result.distance || -1
+      found: result.result,
+      path: path || [],
+      distance: path ? path.length - 1 : -1
     })
 
   } catch (error) {

@@ -131,6 +131,7 @@ function buildRawGraph(
   for (const plugin of activePlugins) {
     const resolved = plugin.parseLockfile(projectDir)
     const manifest = plugin.parseManifest(projectDir)
+    const licenses = plugin.parseLicenses ? plugin.parseLicenses(projectDir) : {}
 
     // Build a map of name → resolved version from lockfile
     const resolvedMap = new Map(resolved.map((r: ResolvedDependency) => [r.name.toLowerCase(), r]))
@@ -139,12 +140,15 @@ function buildRawGraph(
     for (const dep of resolved) {
       const id = nodeId(dep.name, plugin.ecosystem)
       if (!graph.nodes[id]) {
+        const license = licenses[dep.name] || 'UNKNOWN'
         const node = createNode(
           id,
           dep.name,
           plugin.ecosystem,
           dep.declaredVersion,
           dep.resolvedVersion,
+          false,
+          license,
         )
         addNode(graph, node)
       }
@@ -158,7 +162,8 @@ function buildRawGraph(
       if (!graph.nodes[depId]) {
         const resolvedDep: ResolvedDependency | undefined = resolvedMap.get(dep.name.toLowerCase())
         const resolvedVer = resolvedDep?.resolvedVersion ?? dep.declaredVersion
-        const node = createNode(depId, dep.name, plugin.ecosystem, dep.declaredVersion, resolvedVer)
+        const license = licenses[dep.name] || 'UNKNOWN'
+        const node = createNode(depId, dep.name, plugin.ecosystem, dep.declaredVersion, resolvedVer, false, license)
         addNode(graph, node)
       }
 
@@ -180,9 +185,11 @@ function buildRawGraph(
       for (const transitiveDep of dep.dependencies ?? []) {
         const toId = nodeId(transitiveDep.name, plugin.ecosystem)
         if (!graph.nodes[toId]) {
+          const license = licenses[transitiveDep.name] || 'UNKNOWN'
           const node = createNode(
             toId, transitiveDep.name, plugin.ecosystem,
             transitiveDep.declaredVersion, transitiveDep.resolvedVersion,
+            false, license,
           )
           addNode(graph, node)
         }
