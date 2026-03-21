@@ -227,8 +227,20 @@ async function runWithWebInterface(projectDir, port, force = false) {
     // Get the project root directory (where package.json is)
     const projectRoot = path.resolve(__dirname, '..')
 
-    // Start Next.js development server
-    const serverProcess = spawn('npm', ['run', 'dev'], {
+    // Ensure production build exists
+    try {
+      if (!fs.existsSync(path.join(projectRoot, '.next'))) {
+        spinner.text = 'Building application for first time...'
+        execSync('npm run build', { cwd: projectRoot, stdio: 'inherit' })
+      }
+    } catch (buildError) {
+      spinner.fail('Build failed')
+      throw new Error('Failed to build Next.js app. Run "npm run build" manually.')
+    }
+
+    // Start Next.js production server
+    const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm'
+    const serverProcess = spawn(npmCmd, ['run', 'start'], {
       cwd: projectRoot,
       env: {
         ...process.env,
@@ -236,7 +248,8 @@ async function runWithWebInterface(projectDir, port, force = false) {
         PROJECT_DIR: projectDir,
         FORCE_SCAN: force ? 'true' : 'false'
       },
-      stdio: ['ignore', 'pipe', 'pipe']
+      stdio: ['ignore', 'pipe', 'pipe'],
+      shell: true // Handle cross-platform execution
     })
 
     let serverReady = false

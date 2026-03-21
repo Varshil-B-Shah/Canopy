@@ -10,8 +10,8 @@ const __dirname = dirname(__filename)
 // Path to the actual CLI implementation
 const cliPath = resolve(__dirname, 'canopy.js')
 
-// Run the CLI using tsx
-const child = spawn('npx', ['tsx', cliPath, ...process.argv.slice(2)], {
+// Run the CLI using node with tsx loader
+const child = spawn('node', ['--loader', 'tsx', cliPath, ...process.argv.slice(2)], {
   stdio: 'inherit',
   shell: true
 })

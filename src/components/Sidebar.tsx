@@ -106,8 +106,13 @@ const Sidebar: React.FC<Props> = ({
                 <span className="text-xs text-gray-400">Ghost Dependency</span>
               </div>
               <div className="flex items-center space-x-2">
-                <div className={`w-2 h-2 rounded-full ${selectedNode.hasLicenseConflict ? 'bg-purple-500' : 'bg-gray-600'}`}></div>
-                <span className="text-xs text-gray-400">License Conflict</span>
+                <div className={`w-2 h-2 rounded-full ${
+                  selectedNode.license === 'UNKNOWN' ? 'bg-amber-500' :
+                  selectedNode.hasLicenseConflict ? 'bg-purple-500' : 'bg-gray-600'
+                }`}></div>
+                <span className="text-xs text-gray-400">
+                  {selectedNode.license === 'UNKNOWN' ? 'Unknown License' : 'License Conflict'}
+                </span>
               </div>
             </div>
           </div>

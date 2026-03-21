@@ -6,6 +6,7 @@ import type { DependencyGraph, DependencyDiff } from '@/engine/types'
 import GraphCanvas from '@/components/GraphCanvas'
 import Sidebar from '@/components/Sidebar'
 import QueryBar from '@/components/QueryBar'
+import BuildOrderPanel from '@/components/BuildOrderPanel'
 
 interface ScanState {
   status: 'idle' | 'scanning' | 'done' | 'error'
@@ -22,39 +23,76 @@ const FilterBar = ({
   filterType,
   onFilterChange,
   searchTerm,
-  onSearchChange
+  onSearchChange,
+  viewMode,
+  onViewModeChange
 }: {
   filterType: string
   onFilterChange: (filter: string) => void
   searchTerm: string
   onSearchChange: (term: string) => void
+  viewMode: 'graph' | 'build'
+  onViewModeChange: (mode: 'graph' | 'build') => void
 }) => (
   <div className="h-12 bg-gray-800 border-b border-gray-700 flex items-center px-4 justify-between">
-    <div className="flex space-x-4 text-sm">
-      <span className="text-gray-400">Filters:</span>
-      {['all', 'direct', 'dev', 'conflicts', 'circular'].map(filter => (
-        <button
-          key={filter}
-          onClick={() => onFilterChange(filter)}
-          className={`capitalize ${
-            filterType === filter
-              ? 'text-blue-400'
-              : 'text-gray-500 hover:text-gray-400'
-          }`}
-        >
-          {filter}
-        </button>
-      ))}
+    <div className="flex items-center space-x-6">
+      {/* View Mode Toggle */}
+      <div className="flex items-center space-x-2">
+        <span className="text-gray-400 text-sm">View:</span>
+        <div className="flex space-x-1 bg-gray-900 rounded p-1">
+          {[
+            { id: 'graph', label: 'Graph', icon: '🕸️' },
+            { id: 'build', label: 'Build Order', icon: '🔧' }
+          ].map(mode => (
+            <button
+              key={mode.id}
+              onClick={() => onViewModeChange(mode.id as 'graph' | 'build')}
+              className={`px-3 py-1 text-sm rounded transition-colors ${
+                viewMode === mode.id
+                  ? 'bg-blue-600 text-white'
+                  : 'text-gray-400 hover:text-white hover:bg-gray-700'
+              }`}
+            >
+              <span className="mr-1">{mode.icon}</span>
+              {mode.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Filters (only show for graph view) */}
+      {viewMode === 'graph' && (
+        <div className="flex space-x-4 text-sm">
+          <span className="text-gray-400">Filters:</span>
+          {['all', 'direct', 'dev', 'conflicts', 'circular'].map(filter => (
+            <button
+              key={filter}
+              onClick={() => onFilterChange(filter)}
+              className={`capitalize ${
+                filterType === filter
+                  ? 'text-blue-400'
+                  : 'text-gray-500 hover:text-gray-400'
+              }`}
+            >
+              {filter}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
-    <div className="flex items-center space-x-2">
-      <input
-        type="text"
-        placeholder="Search nodes..."
-        value={searchTerm}
-        onChange={(e) => onSearchChange(e.target.value)}
-        className="px-3 py-1 bg-gray-900 border border-gray-600 rounded text-sm text-gray-300 placeholder-gray-500 focus:outline-none focus:border-blue-500"
-      />
-    </div>
+
+    {/* Search (only show for graph view) */}
+    {viewMode === 'graph' && (
+      <div className="flex items-center space-x-2">
+        <input
+          type="text"
+          placeholder="Search nodes..."
+          value={searchTerm}
+          onChange={(e) => onSearchChange(e.target.value)}
+          className="px-3 py-1 bg-gray-900 border border-gray-600 rounded text-sm text-gray-300 placeholder-gray-500 focus:outline-none focus:border-blue-500"
+        />
+      </div>
+    )}
   </div>
 )
 
@@ -102,6 +140,7 @@ function HomePageContent() {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [filterType, setFilterType] = useState('all')
   const [searchTerm, setSearchTerm] = useState('')
+  const [viewMode, setViewMode] = useState<'graph' | 'build'>('graph')
 
   const searchParams = useSearchParams()
   const router = useRouter()
@@ -331,22 +370,33 @@ function HomePageContent() {
               onFilterChange={setFilterType}
               searchTerm={searchTerm}
               onSearchChange={setSearchTerm}
+              viewMode={viewMode}
+              onViewModeChange={setViewMode}
             />
             <div className="flex-1 flex">
-              <GraphCanvas
-                graph={state.graph}
-                selectedNodeId={selectedNodeId}
-                filterType={filterType}
-                searchTerm={searchTerm}
-                onNodeSelect={setSelectedNodeId}
-              />
-              <Sidebar
-                graph={state.graph}
-                selectedNodeId={selectedNodeId}
-                diff={state.diff}
-                projectDir={projectDir}
-                onNodeSelect={setSelectedNodeId}
-              />
+              {viewMode === 'graph' ? (
+                <>
+                  <GraphCanvas
+                    graph={state.graph}
+                    selectedNodeId={selectedNodeId}
+                    filterType={filterType}
+                    searchTerm={searchTerm}
+                    onNodeSelect={setSelectedNodeId}
+                  />
+                  <Sidebar
+                    graph={state.graph}
+                    selectedNodeId={selectedNodeId}
+                    diff={state.diff}
+                    projectDir={projectDir}
+                    onNodeSelect={setSelectedNodeId}
+                  />
+                </>
+              ) : (
+                <BuildOrderPanel
+                  graph={state.graph}
+                  onNodeSelect={setSelectedNodeId}
+                />
+              )}
             </div>
             <QueryBar
               graph={state.graph}

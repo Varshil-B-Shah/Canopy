@@ -49,9 +49,23 @@ const GraphCanvas: React.FC<Props> = ({
       scc.members.includes(node.id) && scc.members.length > 1
     )) return '#f97316' // orange-500
     if (node.isGhostDependency) return '#eab308' // yellow-500
-    if (node.hasLicenseConflict) return '#a855f7' // purple-500
+
+    // Separate actual license conflicts from unknown licenses
+    if (node.hasLicenseConflict) {
+      // Check if it's just unknown license vs actual conflict
+      const licenseConflicts = graph.metadata.licenseConflicts || []
+      const actualConflict = licenseConflicts.find(c =>
+        c.packageName === node.name && c.severity === 'error'
+      )
+      if (actualConflict) {
+        return '#a855f7' // purple-500 for actual conflicts
+      } else if (node.license === 'UNKNOWN') {
+        return '#f59e0b' // amber-500 for unknown licenses
+      }
+    }
+
     return '#64748b' // slate-500 (default)
-  }, [graph.metadata.sccClusters])
+  }, [graph.metadata.sccClusters, graph.metadata.licenseConflicts])
 
   // Calculate node radius based on reverse dependency count
   const getNodeRadius = useCallback((nodeId: string): number => {
@@ -211,7 +225,7 @@ const GraphCanvas: React.FC<Props> = ({
         .strength(-200)
         .distanceMax(300)
       )
-      .force('center', d3.forceCenter(width / 2, height / 2))
+      .force('center', d3.forceCenter(width / 2, height / 2).strength(0.05))
       .force('collision', d3.forceCollide<D3Node>()
         .radius(d => d.radius + 2)
         .strength(0.7)
@@ -408,16 +422,16 @@ const GraphCanvas: React.FC<Props> = ({
       .call(zoomRef.current.transform, transform)
   }, [d3Data.nodes])
 
-  // Expose fit to view function
+  // Auto-fit only on initial load of nodes
   useEffect(() => {
+    if (d3Data.nodes.length === 0) return
+
     const timer = setTimeout(() => {
-      if (d3Data.nodes.length > 0) {
-        fitToView()
-      }
+      fitToView()
     }, 1000) // Allow simulation to settle
 
     return () => clearTimeout(timer)
-  }, [d3Data.nodes.length, fitToView])
+  }, [d3Data.nodes.length]) // Only depend on nodes.length, not fitToView
 
   return (
     <div className="flex-1 relative bg-surface border border-border rounded-lg m-4 overflow-hidden">
@@ -482,6 +496,10 @@ const GraphCanvas: React.FC<Props> = ({
           <div className="flex items-center space-x-2">
             <div className="w-3 h-3 rounded-full bg-yellow-500"></div>
             <span className="text-gray-400">Ghost dependency</span>
+          </div>
+          <div className="flex items-center space-x-2">
+            <div className="w-3 h-3 rounded-full bg-amber-500"></div>
+            <span className="text-gray-400">Unknown license</span>
           </div>
           <div className="flex items-center space-x-2">
             <div className="w-3 h-3 rounded-full bg-purple-500"></div>

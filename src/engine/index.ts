@@ -380,3 +380,6 @@ export function queryReverseDependencies(
 ): string[] {
   return graph.reverseAdjacency[nodeId] ?? []
 }
+
+// Re-export cache functions for API usage
+export { readCache, writeCache, deserializeGraph } from './cache'
